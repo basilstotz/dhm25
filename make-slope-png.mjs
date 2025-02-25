@@ -3,7 +3,7 @@
 
 import { Jimp } from "jimp";
 import { promises as fs } from "fs";
-import { existsSync,readFileSync } from "fs"
+import { existsSync, readFileSync } from "fs"
 import { intToRGBA, cssColorToHex, colorDiff } from "@jimp/utils";
 
 
@@ -152,17 +152,20 @@ function makeSlope(){
 
 
 // main
-
-//let image= new Jimp({ width: ncols, height: nrows, color: 0x000000ff });
-let image = await Jimp.read('dhm25-0.png');
-
-let data= image.bitmap.data;
-
-//readHoehe();
-//await image.write('dhm25-0.png');
-
-//process.exit(0);
+let image;
+let data;
+    
+if(existsSync('dhm25-ele.png')){
+    image = await Jimp.read('dhm25-ele.png');
+    data = image.bitmap.data;
+}else{
+    image= new Jimp({ width: ncols, height: nrows, color: 0x000000ff });
+    data = image.bitmap.data;
+    readHoehe();
+    await image.write('dhm25-ele.png');
+}
 
 makeSlope();
+
 await image.write('dhm25.png');
 
