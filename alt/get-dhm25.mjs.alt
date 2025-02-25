@@ -1,0 +1,180 @@
+#!/usr/bin/env node
+
+
+import { Jimp } from "jimp";
+import { promises as fs } from "fs";
+import { existsSync,readFileSync } from "fs"
+import { intToRGBA, cssColorToHex, colorDiff } from "@jimp/utils";
+//import { calculateDistance } from '@anatoliy-stepanchenko/geodistance-calculator';
+
+function toRadians(degrees) {
+  return degrees * Math.PI / 180;
+}
+
+function toDegrees(radians) {
+  return (radians / Math.PI) * 180
+}
+
+
+
+function calculateDistance(coord1, coord2) {
+  const { lat: lat1, lon: lon1 } = coord1;
+  const { lat: lat2, lon: lon2 } = coord2;
+
+  const earthRadius = 6371; // Earth's radius in kilometers.
+
+  const lat1Rad = (lat1 * Math.PI) / 180;
+  const lon1Rad = (lon1 * Math.PI) / 180;
+  const lat2Rad = (lat2 * Math.PI) / 180;
+  const lon2Rad = (lon2 * Math.PI) / 180;
+
+  const dLat = lat2Rad - lat1Rad;
+  const dLon = lon2Rad - lon1Rad;
+
+  // Calculation using the haversine formula (the formula is divided into two parts).
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1Rad) *
+      Math.cos(lat2Rad) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  const distance = earthRadius * c;
+    //return distance.toFixed(2); // The distance between two geographic points in kilometers rounded to the hundredths.
+    return distance;
+}
+
+
+
+let ncols=15401;
+let nrows=9121;
+
+//let blanc=cssColorToHex('rgba(0,255,0,1.0)');
+
+
+let image= await Jimp.read('dhm25.png');
+let height=image.height;
+let width=image.width;
+//console.log(image.mime+' '+width+' '+height);
+
+
+function getIndices(lat,lon){
+
+    // https://www.swisstopo.admin.ch/en/coordinates-conversion-navref
+    let oLat=45.806900086 //y  LV03: 73987.5
+    let oLon=5.894943851  //x  LV03: 479987.5
+
+    let dx= 1000.0*calculateDistance( { lat: oLat , lon: oLon }, { lat: oLat, lon: lon }); 
+    let dy= 1000.0*calculateDistance( { lat: oLat , lon: lon }, { lat: lat , lon: lon }); 
+
+    let x = Math.round(dx/25.0);
+    let y = height - Math.round(dy/25.0);
+
+    //console.log(x+' '+y);
+    return { x: x, y:y }
+}
+
+function getElevationByIndex(x,y){
+    let c=image.getPixelColor(x,y);
+    let rgba=intToRGBA(c);
+    //console.log(rgba);
+    return ((rgba.g*256+rgba.b)/10.0)-49.52;
+}
+
+// https://observablehq.com/@slutske22/slope-as-a-function-of-latlng-in-leaflet
+
+function getSlope(lat,lon){
+
+    let disp=1;
+    let indices=getIndices(lat,lon);
+    
+    let x=indices.x;
+    let y=indices.y;
+    
+    let N= getElevationByIndex(x,y-disp);
+    let S= getElevationByIndex(x,y+disp);
+    let E= getElevationByIndex(x+disp,y);
+    let W= getElevationByIndex(x-disp,y);
+    
+    let height= getElevationByIndex(x,y);
+    
+    //console.log(N+' '+S+' '+W+' '+E);
+    
+    let dx=2*disp*25;
+    let dy=2*disp*25;
+
+    let dzdx= (E-W)/dx;
+    let dzdy= (N-S)/dy;
+
+    let slope=Math.atan( Math.sqrt( dzdx ** 2 + dzdy ** 2)) * (180 / Math.PI);
+    let aspect = dx !== 0 // counterclockwise from east
+	? ( Math.atan2( dzdy, dzdx ) * (180 / Math.PI) + 180 ) % 360
+	: ( 90 * (dy > 0 ? 1 : -1) + 180 ) % 360;
+
+    return { height: height, slope: slope, aspect: aspect };
+}
+
+//let s=getSlope(45.806910086,5.894953851 )
+//let s=getSlope( 47.5, 7.5 )
+//console.log(s.height+' '+s.slope+' '+s.aspect);
+
+let out={ type: 'FeatureCollection', features: [] };
+
+let factor=0.0001;
+
+function doit(chunks){
+    let geo=JSON.parse(chunks);
+    let features=geo.features;
+    for(let i=0;i<features.length;i++){
+	let feature=features[i];
+	let id=feature.id;
+	let tags=feature.properties.tags;
+	let coordinates=feature.geometry.coordinates;
+	if(tags['addr:country']=='Schweiz/Suisse/Svizzera/Svizra'){
+	    let lat=coordinates[1];
+	    let lon=coordinates[0]
+	    let s=getSlope(lat,lon);
+	    let slope=s.slope;
+	    let aspect=toRadians(s.aspect);
+	    let dy= -1.0*Math.sin(aspect)*slope*factor;
+	    let dx= Math.cos(aspect)*slope*factor;
+
+	    let lat2=lat+dy;
+	    let lon2=lon+dx;
+
+	    let item={ "type": "Feature",
+		       "properties": { id: id },
+		       "geometry": {
+			   "type": "LineString",
+			   "coordinates": [ coordinates, [ lon2, lat2 ]   ]
+		       }
+		     };
+	   	       
+            out.features.push(item);
+	    
+	    //out[id]=s;
+	}
+    }
+    
+    process.stdout.write(JSON.stringify(out,null,2));
+}
+
+
+
+
+var chunks = '';
+
+process.stdin.on('readable', () => {
+  let chunk;
+  while (null !== (chunk = process.stdin.read())) {
+      chunks+=chunk;
+  }
+});
+
+process.stdin.on('end', () => {
+    doit(chunks)
+});
+
